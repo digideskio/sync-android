@@ -59,7 +59,7 @@ public class InsertRevisionCallable {
 
         // before we do anything check if the item we are about to insert isn't already
         // in the database.
-        String sql = "SELECT revs.sequence from revs join docs on revs.doc_id  == docs.doc_id where docs.doc_id = ? and revs.revid = ? ";
+        final String sql = "SELECT revs.sequence from revs join docs on revs.doc_id  == docs.doc_id where docs.doc_id = ? and revs.revid = ? ";
 
         Cursor cursor = null;
         try {
