@@ -15,8 +15,13 @@
 package com.cloudant.sync.datastore.callables;
 
 import com.cloudant.android.ContentValues;
+import com.cloudant.sync.datastore.DocumentException;
+import com.cloudant.sync.sqlite.Cursor;
 import com.cloudant.sync.sqlite.SQLDatabase;
+import com.cloudant.sync.util.DatabaseUtils;
 
+import java.sql.SQLException;
+import java.util.Locale;
 import java.util.logging.Logger;
 
 /**
@@ -50,7 +55,24 @@ public class InsertRevisionCallable {
                 '}';
     }
 
-    public long call(SQLDatabase db) {
+    public Result call(SQLDatabase db) throws SQLException {
+
+        // before we do anything check if the item we are about to insert isn't already
+        // in the database.
+        String sql = "SELECT revs.sequence from revs join docs on revs.doc_id  == docs.doc_id where docs.doc_id = ? and revs.revid = ? ";
+
+        Cursor cursor = null;
+        try {
+            cursor = db.rawQuery(sql, new String[]{String.valueOf(docNumericId), revId});
+            if(cursor.moveToNext()){
+                // this revision is in the database, making this insert a no-op and returning the seq
+                // of the already inserted document.
+                return new Result(cursor.getLong(0), true);
+            }
+        } finally {
+            DatabaseUtils.closeCursorQuietly(cursor);
+        }
+
         long newSequence;
         ContentValues args = new ContentValues();
         args.put("doc_id", this.docNumericId);
@@ -68,6 +90,16 @@ public class InsertRevisionCallable {
         if (newSequence < 0) {
             throw new IllegalStateException("Unknown error inserting new revision, please check log");
         }
-        return newSequence;
+        return new Result(newSequence, false);
+    }
+
+    public static class Result{
+        public final long sequence;
+        public final boolean duplicate;
+
+        public Result(long sequence, boolean duplicate){
+            this.duplicate = duplicate;
+            this.sequence = sequence;
+        }
     }
 }

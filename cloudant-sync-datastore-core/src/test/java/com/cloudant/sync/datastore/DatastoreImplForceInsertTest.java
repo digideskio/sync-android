@@ -257,12 +257,12 @@ public class DatastoreImplForceInsertTest {
         Assert.assertTrue(Arrays.equals(bodyOne.asBytes(), obj.getBody().asBytes()));
     }
 
-    @Test(expected = DocumentException.class)
     public void forceInsert_sameRevisionTwice() throws Exception {
         final String sql = "SELECT docs.docid, revid from revs join docs on revs.doc_id  == docs.doc_id where docs.docid = ? and revs.revid = ? ";
 
 
         final DocumentRevision rev = createDbObject("1-rev", bodyOne);
+        // this force insert should be a no-op.
         datastore.forceInsert(rev, "1-rev");
         Assert.assertThat(datastore.getDocumentCount(), is(1));
         try {

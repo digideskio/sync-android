@@ -715,7 +715,7 @@ public class DatastoreImpl implements Datastore {
     }
 
     private DocumentRevision createDocumentBody(SQLDatabase db, String docId, final DocumentBody body)
-            throws AttachmentException, ConflictException, DatastoreException {
+            throws AttachmentException, ConflictException, DatastoreException, SQLException {
         Preconditions.checkState(this.isOpen(), "Database is closed");
         CouchUtils.validateDocumentId(docId);
         Preconditions.checkNotNull(body, "Input document body cannot be null");
@@ -830,7 +830,7 @@ public class DatastoreImpl implements Datastore {
     private DocumentRevision updateDocumentBody(SQLDatabase db, String docId,
                                                      String prevRevId,
                                                      final DocumentBody body)
-            throws ConflictException, AttachmentException, DocumentNotFoundException, DatastoreException {
+            throws ConflictException, AttachmentException, DocumentNotFoundException, DatastoreException, SQLException {
         Preconditions.checkState(this.isOpen(), "Database is closed");
         Preconditions.checkArgument(!Strings.isNullOrEmpty(docId),
                 "Input document id cannot be empty");
@@ -853,7 +853,7 @@ public class DatastoreImpl implements Datastore {
     }
 
     private DocumentRevision deleteDocumentInQueue(SQLDatabase db, final String docId,
-                                                        final String prevRevId) throws ConflictException, DocumentNotFoundException, DatastoreException {
+                                                        final String prevRevId) throws ConflictException, DocumentNotFoundException, DatastoreException, SQLException {
         Preconditions.checkState(this.isOpen(), "Database is closed");
         Preconditions.checkArgument(!Strings.isNullOrEmpty(docId),
                 "Input document id cannot be empty");
@@ -952,7 +952,7 @@ public class DatastoreImpl implements Datastore {
         return db.insert("docs", args);
     }
 
-    private long insertStubRevision(SQLDatabase db, long docNumericId, String revId, long parentSequence) throws AttachmentException {
+    private InsertRevisionCallable.Result insertStubRevision(SQLDatabase db, long docNumericId, String revId, long parentSequence) throws AttachmentException, SQLException {
         // don't copy attachments
         InsertRevisionCallable callable = new InsertRevisionCallable();
         callable.docNumericId = docNumericId;
@@ -1156,22 +1156,6 @@ public class DatastoreImpl implements Datastore {
 
                         logger.finer("forceInsert(): " + item.rev.toString());
 
-                        // before we do anything check if the item we are about to insert isn't already
-                        // in the database.
-                        String sql = "SELECT docs.docid, revid from revs join docs on revs.doc_id  == docs.doc_id where docs.docid = ? and revs.revid = ? ";
-
-                        Cursor cursor = null;
-                        try {
-                            cursor = db.rawQuery(sql, new String[]{item.rev.getId(), item.rev.getRevision()});
-                            if (cursor.moveToNext()){
-                                throw new DocumentException(String.format(Locale.ENGLISH,
-                                        "Document with id: %s at revison: %s already exists in database",
-                                        item.rev.getId(), item.rev.getRevision()));
-                            }
-                        } finally {
-                            DatabaseUtils.closeCursorQuietly(cursor);
-                        }
-
                         DocumentCreated documentCreated = null;
                         DocumentUpdated documentUpdated = null;
 
@@ -1181,14 +1165,20 @@ public class DatastoreImpl implements Datastore {
                         long seq = 0;
 
                         if (docNumericId != -1) {
-                            seq = doForceInsertExistingDocumentWithHistory(db, item.rev, docNumericId, item.revisionHistory,
+                            InsertRevisionCallable.Result result   = doForceInsertExistingDocumentWithHistory(db, item.rev, docNumericId, item.revisionHistory,
                                     item.attachments);
-                            item.rev.initialiseSequence(seq);
+                            item.rev.initialiseSequence(result.sequence);
+                            if (result.duplicate){
+                                continue;
+                            }
                             // TODO fetch the parent doc?
                             documentUpdated = new DocumentUpdated(null, item.rev);
                         } else {
-                            seq = doForceInsertNewDocumentWithHistory(db, item.rev, item.revisionHistory);
-                            item.rev.initialiseSequence(seq);
+                            InsertRevisionCallable.Result result  = doForceInsertNewDocumentWithHistory(db, item.rev, item.revisionHistory);
+                            if (result.duplicate){
+                                continue;
+                            }
+                            item.rev.initialiseSequence(result.sequence);
                             documentCreated = new DocumentCreated(item.rev);
                         }
 
@@ -1327,11 +1317,11 @@ public class DatastoreImpl implements Datastore {
      * @param revisions   revision history to insert, it includes all revisions (include the revision of the DocumentRevision
      *                    as well) sorted in ascending order.
      */
-    private long doForceInsertExistingDocumentWithHistory(SQLDatabase db,DocumentRevision newRevision,
-                                                          long docNumericId,
-                                                          List<String> revisions,
-                                                          Map<String, Object> attachments)
-            throws AttachmentException, DocumentNotFoundException, DatastoreException {
+    private InsertRevisionCallable.Result doForceInsertExistingDocumentWithHistory(SQLDatabase db, DocumentRevision newRevision,
+                                                                                   long docNumericId,
+                                                                                   List<String> revisions,
+                                                                                   Map<String, Object> attachments)
+            throws AttachmentException, DocumentNotFoundException, DatastoreException, SQLException {
         logger.entering("BasicDatastore",
                 "doForceInsertExistingDocumentWithHistory",
                 new Object[]{newRevision, revisions, attachments});
@@ -1343,20 +1333,17 @@ public class DatastoreImpl implements Datastore {
         // do we have a common ancestor?
         long ancestorSequence = getSequenceInQueue(db, newRevision.getId(), revisions.get(0));
 
-        long sequence;
-
         if(ancestorSequence == -1) {
-            sequence = insertDocumentHistoryToNewTree(db,newRevision, revisions, docNumericId);
+            return insertDocumentHistoryToNewTree(db,newRevision, revisions, docNumericId);
         } else {
-            sequence = insertDocumentHistoryIntoExistingTree(db,newRevision, revisions, docNumericId, attachments);
+            return  insertDocumentHistoryIntoExistingTree(db,newRevision, revisions, docNumericId, attachments);
         }
-        return sequence;
     }
 
-    private long insertDocumentHistoryIntoExistingTree(SQLDatabase db, DocumentRevision newRevision, List<String> revisions,
-                                                       Long docNumericID,
-                                                       Map<String, Object> attachments)
-            throws AttachmentException, DocumentNotFoundException, DatastoreException {
+    private InsertRevisionCallable.Result insertDocumentHistoryIntoExistingTree(SQLDatabase db, DocumentRevision newRevision, List<String> revisions,
+                                                                                Long docNumericID,
+                                                                                Map<String, Object> attachments)
+            throws AttachmentException, DocumentNotFoundException, DatastoreException, SQLException {
 
         // get info about previous "winning" rev
         long previousLeafSeq = getSequenceInQueue(db, newRevision.getId(), null);
@@ -1369,7 +1356,7 @@ public class DatastoreImpl implements Datastore {
             String revId = revisions.get(i);
             long seq = getSequenceInQueue(db, newRevision.getId(), revId);
             if (seq == -1) {
-                seq = insertStubRevision(db,docNumericID, revId, parentSeq);
+                seq = insertStubRevision(db,docNumericID, revId, parentSeq).sequence;
                 this.changeDocumentToBeNotCurrent(db, parentSeq);
             }
             parentSeq = seq;
@@ -1388,7 +1375,7 @@ public class DatastoreImpl implements Datastore {
         callable.current = false; // we'll call pickWinnerOfConflicts to set this if it needs it
         callable.data = newRevision.asBytes();
         callable.available = true;
-        long newLeafSeq = callable.call(db);
+        InsertRevisionCallable.Result result = callable.call(db);
 
         pickWinnerOfConflicts(db, docNumericID, newRevision.getId(), previousLeafSeq);
 
@@ -1398,7 +1385,7 @@ public class DatastoreImpl implements Datastore {
                 Boolean stub = ((Map<String, Boolean>) att.getValue()).get("stub");
                 if (stub != null && stub.booleanValue()) {
                     try {
-                        AttachmentManager.copyAttachment(db, previousLeafSeq, newLeafSeq, att
+                        AttachmentManager.copyAttachment(db, previousLeafSeq, result.sequence, att
                                 .getKey());
                     } catch (SQLException sqe) {
                         logger.log(Level.SEVERE, "Error copying stubbed attachments", sqe);
@@ -1408,13 +1395,13 @@ public class DatastoreImpl implements Datastore {
             }
         }
 
-        return newLeafSeq;
+        return result;
     }
 
-    private long insertDocumentHistoryToNewTree(SQLDatabase db, DocumentRevision newRevision,
-                                                List<String> revisions,
-                                                Long docNumericID)
-            throws AttachmentException, DocumentNotFoundException, DatastoreException {
+    private InsertRevisionCallable.Result insertDocumentHistoryToNewTree(SQLDatabase db, DocumentRevision newRevision,
+                                                                         List<String> revisions,
+                                                                         Long docNumericID)
+            throws AttachmentException, DocumentNotFoundException, DatastoreException, SQLException {
         Preconditions.checkArgument(checkCurrentRevisionIsInRevisionHistory(newRevision, revisions),
                 "Current revision must exist in revision history.");
 
@@ -1426,7 +1413,7 @@ public class DatastoreImpl implements Datastore {
         long parentSequence = 0L;
         for(int i = 0 ; i < revisions.size() - 1 ; i ++) {
             //we copy attachments here so allow the exception to propagate
-            parentSequence = insertStubRevision(db,docNumericID, revisions.get(i), parentSequence);
+            parentSequence = insertStubRevision(db,docNumericID, revisions.get(i), parentSequence).sequence;
         }
         // don't copy attachments
         String newLeafRev = newRevision.getRevision();
@@ -1438,10 +1425,10 @@ public class DatastoreImpl implements Datastore {
         callable.current = false; // we'll call pickWinnerOfConflicts to set this if it needs it
         callable.data = newRevision.asBytes();
         callable.available = !newRevision.isDeleted();
-        long newLeafSeq = callable.call(db);
+        InsertRevisionCallable.Result result = callable.call(db);
 
         pickWinnerOfConflicts(db, docNumericID, newRevision.getId(), previousLeafSeq);
-        return newLeafSeq;
+        return result;
     }
 
 
@@ -1521,10 +1508,10 @@ public class DatastoreImpl implements Datastore {
      * @param revHistory revision history to insert, it includes all revisions (include the revision of the DocumentRevision
      *                   as well) sorted in ascending order.
      */
-    private long doForceInsertNewDocumentWithHistory(SQLDatabase db,
-                                                     DocumentRevision rev,
-                                                     List<String> revHistory)
-            throws AttachmentException{
+    private InsertRevisionCallable.Result doForceInsertNewDocumentWithHistory(SQLDatabase db,
+                                                                              DocumentRevision rev,
+                                                                              List<String> revHistory)
+            throws AttachmentException, SQLException {
         logger.entering("DocumentRevision",
                 "doForceInsertNewDocumentWithHistory()",
                 new Object[]{rev, revHistory});
@@ -1532,8 +1519,10 @@ public class DatastoreImpl implements Datastore {
         long docNumericID = insertDocumentID(db,rev.getId());
         long parentSequence = 0L;
         for (int i = 0; i < revHistory.size() - 1; i++) {
+            //TODO: We could just continue here, if we have a dup we can just ignore
+            // that is a duplicate, it would mean the tree is roughly what we expect.
             // Insert stub node
-            parentSequence = insertStubRevision(db,docNumericID, revHistory.get(i), parentSequence);
+            parentSequence = insertStubRevision(db,docNumericID, revHistory.get(i), parentSequence).sequence;
         }
         // Insert the leaf node (don't copy attachments)
         InsertRevisionCallable callable = new InsertRevisionCallable();
@@ -1544,8 +1533,7 @@ public class DatastoreImpl implements Datastore {
         callable.current = true;
         callable.data = rev.getBody().asBytes();
         callable.available = true;
-        long sequence = callable.call(db);
-        return sequence;
+        return callable.call(db);
     }
 
     private void changeDocumentToBeCurrent(SQLDatabase db, long sequence) {
@@ -1850,7 +1838,7 @@ public class DatastoreImpl implements Datastore {
 
     private String insertNewWinnerRevision(SQLDatabase db,DocumentBody newWinner,
                                            DocumentRevision oldWinner)
-            throws AttachmentException, DatastoreException {
+            throws AttachmentException, DatastoreException, SQLException {
         String newRevisionId = CouchUtils.generateNextRevisionId(oldWinner.getRevision());
 
         InsertRevisionCallable callable = new InsertRevisionCallable();
@@ -2098,7 +2086,7 @@ public class DatastoreImpl implements Datastore {
     private DocumentRevision updateDocumentFromRevision(SQLDatabase db, DocumentRevision rev,
                                                              List<PreparedAttachment> preparedNewAttachments,
                                                              List<SavedAttachment> existingAttachments)
-            throws ConflictException, AttachmentException, DocumentNotFoundException, DatastoreException {
+            throws ConflictException, AttachmentException, DocumentNotFoundException, DatastoreException, SQLException {
         Preconditions.checkNotNull(rev, "DocumentRevision cannot be null");
 
         DocumentRevision updated = updateDocumentBody(db, rev.getId(), rev.getRevision(), rev.getBody());
