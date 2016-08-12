@@ -1164,22 +1164,20 @@ public class DatastoreImpl implements Datastore {
                         long docNumericId = getNumericIdInQueue(db, item.rev.getId());
                         long seq = 0;
 
+                        InsertRevisionCallable.Result result;
                         if (docNumericId != -1) {
-                            InsertRevisionCallable.Result result   = doForceInsertExistingDocumentWithHistory(db, item.rev, docNumericId, item.revisionHistory,
+                             result = doForceInsertExistingDocumentWithHistory(db, item.rev, docNumericId, item.revisionHistory,
                                     item.attachments);
-                            item.rev.initialiseSequence(result.sequence);
-                            if (result.duplicate){
-                                continue;
-                            }
                             // TODO fetch the parent doc?
                             documentUpdated = new DocumentUpdated(null, item.rev);
                         } else {
-                            InsertRevisionCallable.Result result  = doForceInsertNewDocumentWithHistory(db, item.rev, item.revisionHistory);
-                            if (result.duplicate){
-                                continue;
-                            }
-                            item.rev.initialiseSequence(result.sequence);
+                            result  = doForceInsertNewDocumentWithHistory(db, item.rev, item.revisionHistory);
                             documentCreated = new DocumentCreated(item.rev);
+                        }
+
+                        item.rev.initialiseSequence(result.sequence);
+                        if (result.duplicate){
+                            continue;
                         }
 
                         // now deal with any attachments
