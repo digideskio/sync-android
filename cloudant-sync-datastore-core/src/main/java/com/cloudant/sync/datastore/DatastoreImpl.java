@@ -61,6 +61,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -1154,6 +1155,22 @@ public class DatastoreImpl implements Datastore {
                     for (ForceInsertItem item : items) {
 
                         logger.finer("forceInsert(): " + item.rev.toString());
+
+                        // before we do anything check if the item we are about to insert isn't already
+                        // in the database.
+                        String sql = "SELECT docs.docid, revid from revs join docs on revs.doc_id  == docs.doc_id where docs.docid = ? and revs.revid = ? ";
+
+                        Cursor cursor = null;
+                        try {
+                            cursor = db.rawQuery(sql, new String[]{item.rev.getId(), item.rev.getRevision()});
+                            if (cursor.moveToNext()){
+                                throw new DocumentException(String.format(Locale.ENGLISH,
+                                        "Document with id: %s at revison: %s already exists in database",
+                                        item.rev.getId(), item.rev.getRevision()));
+                            }
+                        } finally {
+                            DatabaseUtils.closeCursorQuietly(cursor);
+                        }
 
                         DocumentCreated documentCreated = null;
                         DocumentUpdated documentUpdated = null;

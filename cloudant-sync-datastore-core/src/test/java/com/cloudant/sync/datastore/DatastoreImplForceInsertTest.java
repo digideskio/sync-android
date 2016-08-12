@@ -17,18 +17,24 @@ package com.cloudant.sync.datastore;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.hasItems;
 import static org.hamcrest.collection.IsCollectionWithSize.hasSize;
+import static org.hamcrest.core.Is.is;
 
+import com.cloudant.sync.sqlite.Cursor;
 import com.cloudant.sync.sqlite.SQLDatabase;
+import com.cloudant.sync.sqlite.SQLQueueCallable;
 import com.cloudant.sync.util.CouchUtils;
+import com.cloudant.sync.util.DatabaseUtils;
 import com.cloudant.sync.util.JSONUtils;
 import com.cloudant.sync.util.TestUtils;
 
 import org.apache.commons.io.FileUtils;
+import org.hamcrest.core.Is;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -249,6 +255,39 @@ public class DatastoreImplForceInsertTest {
         DocumentRevision obj = datastore.getDocument(OBJECT_ID);
         Assert.assertEquals(remoteRevisionId6, obj.getRevision());
         Assert.assertTrue(Arrays.equals(bodyOne.asBytes(), obj.getBody().asBytes()));
+    }
+
+    @Test(expected = DocumentException.class)
+    public void forceInsert_sameRevisionTwice() throws Exception {
+        final String sql = "SELECT docs.docid, revid from revs join docs on revs.doc_id  == docs.doc_id where docs.docid = ? and revs.revid = ? ";
+
+
+        final DocumentRevision rev = createDbObject("1-rev", bodyOne);
+        datastore.forceInsert(rev, "1-rev");
+        Assert.assertThat(datastore.getDocumentCount(), is(1));
+        try {
+            datastore.forceInsert(rev, "1-rev");
+        } finally {
+            datastore.runOnDbQueue(new SQLQueueCallable<Void>() {
+                @Override
+                public Void call(SQLDatabase db) throws Exception {
+
+                    Cursor cursor = null;
+                    try {
+                        cursor = db.rawQuery(sql, new String[]{rev.getId(), "1-rev"});
+                        int resultscount = 0;
+                        while (cursor.moveToNext()) {
+                            resultscount++;
+                        }
+                        Assert.assertThat(resultscount, is(1));
+                    } finally {
+                        DatabaseUtils.closeCursorQuietly(cursor);
+                    }
+
+                    return null;
+                }
+            }).get(); // test will fail if exception is thrown.
+        }
     }
 
     @Test
