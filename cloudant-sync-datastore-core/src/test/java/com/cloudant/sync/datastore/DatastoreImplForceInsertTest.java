@@ -19,6 +19,8 @@ import static org.hamcrest.CoreMatchers.hasItems;
 import static org.hamcrest.collection.IsCollectionWithSize.hasSize;
 import static org.hamcrest.core.Is.is;
 
+import com.cloudant.sync.event.Subscribe;
+import com.cloudant.sync.notifications.DocumentModified;
 import com.cloudant.sync.sqlite.Cursor;
 import com.cloudant.sync.sqlite.SQLDatabase;
 import com.cloudant.sync.sqlite.SQLQueueCallable;
@@ -262,32 +264,37 @@ public class DatastoreImplForceInsertTest {
 
 
         final DocumentRevision rev = createDbObject("1-rev", bodyOne);
-        // this force insert should be a no-op.
+        EventSubscriber eventSubscriber = new EventSubscriber();
+        datastore.getEventBus().register(eventSubscriber);
         datastore.forceInsert(rev, "1-rev");
         Assert.assertThat(datastore.getDocumentCount(), is(1));
-        try {
-            datastore.forceInsert(rev, "1-rev");
-        } finally {
-            datastore.runOnDbQueue(new SQLQueueCallable<Void>() {
-                @Override
-                public Void call(SQLDatabase db) throws Exception {
+        Assert.assertThat(eventSubscriber.eventCount, is(1));
+        datastore.getEventBus().unregister(eventSubscriber);
+        eventSubscriber = new EventSubscriber();
+        datastore.getEventBus().register(eventSubscriber);
+        datastore.forceInsert(rev, "1-rev");
+        Assert.assertThat(eventSubscriber.eventCount, is(0));
+        datastore.getEventBus().unregister(eventSubscriber);
+        datastore.runOnDbQueue(new SQLQueueCallable<Void>() {
+            @Override
+            public Void call(SQLDatabase db) throws Exception {
 
-                    Cursor cursor = null;
-                    try {
-                        cursor = db.rawQuery(sql, new String[]{rev.getId(), "1-rev"});
-                        int resultscount = 0;
-                        while (cursor.moveToNext()) {
-                            resultscount++;
-                        }
-                        Assert.assertThat(resultscount, is(1));
-                    } finally {
-                        DatabaseUtils.closeCursorQuietly(cursor);
+                Cursor cursor = null;
+                try {
+                    cursor = db.rawQuery(sql, new String[]{rev.getId(), "1-rev"});
+                    int resultscount = 0;
+                    while (cursor.moveToNext()) {
+                        resultscount++;
                     }
-
-                    return null;
+                    Assert.assertThat(resultscount, is(1));
+                } finally {
+                    DatabaseUtils.closeCursorQuietly(cursor);
                 }
-            }).get(); // test will fail if exception is thrown.
-        }
+
+                return null;
+            }
+        }).get(); // test will fail if exception is thrown.
+
     }
 
     @Test
@@ -654,6 +661,15 @@ public class DatastoreImplForceInsertTest {
             String revId = String.format("%d-%s%d", i+1, id, j);
             DocumentRevision rev = createDbObject(revId, bodyOne);
             datastore.forceInsert(rev, lastRevId, revId);
+        }
+    }
+
+    public static class EventSubscriber{
+        int eventCount =0;
+
+        @Subscribe
+        public void event(DocumentModified documentModified){
+            eventCount++;
         }
     }
 
