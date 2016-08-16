@@ -1519,8 +1519,15 @@ public class DatastoreImpl implements Datastore {
         for (int i = 0; i < revHistory.size() - 1; i++) {
             //TODO: We could just continue here, if we have a dup we can just ignore
             // that is a duplicate, it would mean the tree is roughly what we expect.
+            InsertRevisionCallable.Result result = insertStubRevision(db,docNumericID, revHistory.get(i), parentSequence);
+            if (result.duplicate){
+                logger.warning(String.format(Locale.ENGLISH, "Attempted to insert duplicate revision with id: %s at revision, %s.",
+                        rev.getId(),
+                        revHistory.get(i)));
+            }
+
             // Insert stub node
-            parentSequence = insertStubRevision(db,docNumericID, revHistory.get(i), parentSequence).sequence;
+            parentSequence = result.sequence;
         }
         // Insert the leaf node (don't copy attachments)
         InsertRevisionCallable callable = new InsertRevisionCallable();
