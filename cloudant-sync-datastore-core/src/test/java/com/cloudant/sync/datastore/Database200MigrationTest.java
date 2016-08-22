@@ -507,7 +507,7 @@ public class Database200MigrationTest {
 
 
     private void runMigration() throws NoSuchFieldException, IllegalAccessException {
-        getQueue().updateSchema(new MigrateDatabase100To200(), 201);
+        getQueue().updateSchema(new MigrateDatabase100To200(DatastoreConstants.getSchemaVersion200()), 201);
     }
 
     private int revisionCount() throws InterruptedException, ExecutionException {
