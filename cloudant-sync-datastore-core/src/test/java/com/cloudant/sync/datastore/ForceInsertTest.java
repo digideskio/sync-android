@@ -50,7 +50,9 @@ public class ForceInsertTest extends BasicDatastoreTestBase {
 
         ArrayList<String> revisionHistory = new ArrayList<String>();
         revisionHistory.add(doc1_rev1.getRevision());
-        
+        revisionHistory.add("2-revision");
+        doc1_rev1.setRevision("2-revision");
+
         // now do a force insert - we should get an updated event as it's already there
         datastore.forceInsert((DocumentRevision)doc1_rev1, revisionHistory,null, null, false);
         boolean ok1 = NotificationTestUtils.waitForSignal(documentUpdated);
@@ -84,14 +86,20 @@ public class ForceInsertTest extends BasicDatastoreTestBase {
 
         ArrayList<String> revisionHistory = new ArrayList<String>();
         revisionHistory.add(doc1_rev1.getRevision());
+        revisionHistory.add("2-revision");
+
+        // We need to create a "clean" document for force insert of the attachment
+        // manager will add the attachments to seq 1 instead of seq 2.
+        DocumentRevision rev2 = new DocumentRevision(doc1_rev1.id, "2-revision");
+        rev2.setBody(bodyOne);
 
         // now do a force insert and then see if we get the attachment back
-        datastore.forceInsert(doc1_rev1, revisionHistory, atts,null, pullAttachmentsInline);
+        datastore.forceInsert(rev2, revisionHistory, atts,null, pullAttachmentsInline);
 
-        Attachment storedAtt = datastore.getAttachment(doc1_rev1.getId(), doc1_rev1.getRevision(), "att1");
+        Attachment storedAtt = datastore.getAttachment(rev2.getId(), rev2.getRevision(), "att1");
         Assert.assertNotNull(storedAtt);
 
-        Attachment noSuchAtt = datastore.getAttachment(doc1_rev1.getId(), doc1_rev1.getRevision(), "att2");
+        Attachment noSuchAtt = datastore.getAttachment(rev2.getId(), rev2.getRevision(), "att2");
         Assert.assertNull(noSuchAtt);
     }
 
@@ -149,5 +157,6 @@ public class ForceInsertTest extends BasicDatastoreTestBase {
         if (documentUpdated != null)
             documentUpdated.countDown();
     }
-    
+
+
 }
